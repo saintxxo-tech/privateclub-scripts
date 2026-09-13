@@ -37,8 +37,6 @@ local CONFIG = {
     --   3. File    a local file in the executor's workspace folder
     -- Notes: first character is the marker  +  added   -  fixed   ~  changed
     Library = {
-        -- File is a fallback: drop the .lua into your executor's workspace
-        -- folder under any of these names and Load works with nothing hosted.
         { Name = "Universal", PlaceId = 0, Url = "", Script = "universal.lua",
           File = { "privateclub_universal.lua", "universal.lua" },
           Authors = "privateclub",
@@ -50,35 +48,6 @@ local CONFIG = {
             "+ Player list with teleport and spectate",
             "+ Saveable configs and accent colours",
             "~ Right Ctrl toggles the menu",
-        } },
-        { Name = "Blade Ball", PlaceId = 13772394625, Url = "", Script = "bladeball.lua", Authors = "privateclub",
-          Updated = "-", Notes = {
-            "+ Auto parry with curve prediction",
-            "+ Spam parry toggle",
-            "+ Ability auto-use",
-            "~ Ping compensation reworked",
-            "- Parry no longer misses on deflect",
-        } },
-        { Name = "Fisch", PlaceId = 16732694052, Url = "", Script = "fisch.lua", Authors = "privateclub",
-          Updated = "-", Notes = {
-            "+ Auto shake and reel",
-            "+ Instant catch",
-            "+ Auto sell at capacity",
-            "- Rod detection on rejoin",
-        } },
-        { Name = "Grow a Garden", PlaceId = 126884695634066, Url = "", Script = "growagarden.lua", Authors = "privateclub",
-          Updated = "-", Notes = {
-            "+ Auto plant and harvest",
-            "+ Auto buy seeds",
-            "+ Pet auto-equip",
-            "~ Harvest loop timing",
-        } },
-        { Name = "Steal a Brainrot", PlaceId = 109983668079237, Url = "", Script = "stealabrainrot.lua", Authors = "privateclub",
-          Updated = "-", Notes = {
-            "+ Auto steal",
-            "+ Base lock bypass",
-            "+ Item ESP",
-            "- Teleport no longer voids",
         } },
         { Name = "Murder Mystery 2", PlaceId = 142823291, Url = "", Script = "mm2.lua",
           File = { "privateclub_mm2.lua", "mm2.lua" },
@@ -93,43 +62,19 @@ local CONFIG = {
             "+ Player list, chat logs, skybox changer",
             "~ Right Ctrl toggles the menu",
         } },
-        { Name = "Da Hood", PlaceId = 2788229376, Url = "", Script = "dahood.lua", Authors = "privateclub",
+        -- PlaceId is still 0: drop the real id in and the icon plus the
+        -- "you are in this game" dot start working.
+        { Name = "Ghost Drivers", PlaceId = 0, Url = "", Script = "ghostdrivers.lua",
+          File = { "privateclub_ghostdrivers.lua", "ghostdrivers.lua" },
+          Authors = "privateclub",
           Updated = "-", Notes = {
-            "+ Aim assist",
-            "+ Silent aim",
-            "+ Auto farm",
-            "- Camlock no longer drifts",
-        } },
-        { Name = "Arsenal", PlaceId = 286090429, Url = "", Script = "arsenal.lua", Authors = "privateclub",
-          Updated = "-", Notes = {
-            "+ Silent aim",
-            "+ Player ESP",
-            "~ Hitbox expander cleaned up",
-        } },
-        { Name = "Jailbreak", PlaceId = 606849621, Url = "", Script = "jailbreak.lua", Authors = "privateclub",
-          Updated = "-", Notes = {
-            "+ Auto rob all stores",
-            "+ Vehicle speed",
-            "+ Noclip",
-        } },
-        { Name = "Pet Sim 99", PlaceId = 8737899170, Url = "", Script = "petsim99.lua", Authors = "privateclub",
-          Updated = "-", Notes = {
-            "+ Auto farm coins",
-            "+ Auto hatch",
-            "+ Auto upgrade",
-        } },
-        { Name = "Bee Swarm", PlaceId = 1537690962, Url = "", Script = "beeswarm.lua", Authors = "privateclub",
-          Updated = "-", Notes = {
-            "+ Auto collect",
-            "+ Auto quest",
-            "~ Field pathing",
-        } },
-        { Name = "Blox Fruits", PlaceId = 2753915549, Url = "", Script = "bloxfruits.lua", Authors = "privateclub",
-          Updated = "-", Notes = {
-            "+ Auto farm level",
-            "+ Fruit sniper",
-            "+ Raid helper",
-            "- Sea event teleports",
+            "+ Auto drive with waypoints and throttle hold",
+            "+ Player ESP with speed, level, rank and cash",
+            "+ Vehicle tuning: top speed, torque, turn rate",
+            "+ Infinite nitro and fuel",
+            "+ No traffic collision",
+            "+ Session stats and Discord webhook reports",
+            "~ Right Ctrl toggles the menu",
         } },
     },
 }
