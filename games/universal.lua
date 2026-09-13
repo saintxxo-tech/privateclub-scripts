@@ -122,6 +122,17 @@ end
 local ENV = (type(getgenv) == "function" and getgenv()) or _G
 if ENV.__pc_uni then pcall(function() ENV.__pc_uni:Destroy() end) end
 
+-- shared visuals engine. lives in its own file so every script in the
+-- hub can use the same skyboxes, shaders, glow and music code.
+local V
+do
+    local base = "https://raw.githubusercontent.com/saintxxo-tech/privateclub-scripts/main/"
+    local ok, mod = pcall(function()
+        return loadstring(game:HttpGet(base .. "lib/visuals.lua?t=" .. os.time()))()
+    end)
+    if ok and type(mod) == "table" then V = mod end
+end
+
 local gui = new("ScreenGui", {
     Name = "\u{200B}pcu" .. tostring(math.random(100000, 999999)),
     ResetOnSpawn = false,
@@ -159,6 +170,15 @@ local S = {
     espSkeleton = false, espChams = false,
     espTeam = false, espArrows = false,
     espMaxDist = 2000, espTextSize = 13, espChamsFill = 60,
+    espGlow = false, espNeon = false, espRainbow = false, espPulse = false,
+    glowFill = 55, glowOutline = 0, glowWalls = true,
+
+    shader = "Off", bloomBoost = 0, blurAmount = 0,
+    ccSat = 0, ccContrast = 0, ccBright = 0,
+    atmoDensity = 30, atmoHaze = 60,
+    skybox = "Default",
+
+    musicVol = 50, musicLoop = false, musicShuffle = false,
 
     -- visuals
     fullbright = false, noFog = false, xray = false, fov = 70,
@@ -1014,6 +1034,25 @@ local function updateChams(plr, colour)
     hl.OutlineTransparency = 0
 end
 
+-- glow and neon come from the shared engine, so every script gets the
+-- same look from one place
+local function updateGlow(plr, colour)
+    if not V then return end
+    local char = plr.Character
+    if not char then return end
+
+    V.glow(char, colour, {
+        enabled = S.espOn and S.espGlow,
+        rainbow = S.espRainbow,
+        pulse = S.espPulse,
+        fill = S.glowFill / 100,
+        outline = S.glowOutline / 100,
+        throughWalls = S.glowWalls,
+    })
+
+    V.neon(char, S.espRainbow and V.rainbow() or colour, S.espOn and S.espNeon)
+end
+
 RunService.RenderStepped:Connect(function()
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LP then
@@ -1199,9 +1238,11 @@ RunService.RenderStepped:Connect(function()
                         end
 
                         updateChams(plr, colour)
+                        updateGlow(plr, colour)
                     else
                         hideEsp(o)
                         updateChams(plr, colour)
+                        updateGlow(plr, colour)
                     end
                 else
                     hideEsp(o)
@@ -1398,11 +1439,18 @@ local pageHolder = new("Frame", {
 local pages, tabs = {}, {}
 local currentPage
 
+-- scrolling, so a page can hold more than one screen of sections
 local function makePage()
-    return new("Frame", {
+    return new("ScrollingFrame", {
         Parent = pageHolder,
         Size = UDim2.fromScale(1, 1),
         BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 2,
+        ScrollBarImageColor3 = T.LINE,
+        CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        ScrollingDirection = Enum.ScrollingDirection.Y,
         Visible = false,
     })
 end
@@ -1412,6 +1460,8 @@ local pgEsp    = makePage()
 local pgVisual = makePage()
 local pgWorld  = makePage()
 local pgMisc   = makePage()
+local pgShader = makePage()
+local pgAudio  = makePage()
 
 local function selectPage(name)
     if currentPage == name then return end
@@ -1474,6 +1524,8 @@ addTab("ESP", pgEsp)
 addTab("Visuals", pgVisual)
 addTab("World", pgWorld)
 addTab("Misc", pgMisc)
+addTab("Shaders", pgShader)
+addTab("Audio", pgAudio)
 
 local CW = 306   -- column width
 local C1, C2 = 14, 340
@@ -1564,10 +1616,25 @@ Slider(sec, "Max distance", "espMaxDist", 100, 5000, "m")
 Slider(sec, "Text size", "espTextSize", 9, 22, "px")
 Slider(sec, "Chams fill", "espChamsFill", 0, 100, "%")
 
+do
+    local gsec = Section(pgEsp, "GLOW", C1, 466, CW, 150)
+    Toggle(gsec, "Glow outline", "espGlow")
+    Toggle(gsec, "Neon body", "espNeon", function(on)
+        if not on and V then V.clearNeon() end
+    end)
+    Toggle(gsec, "Rainbow", "espRainbow")
+    Toggle(gsec, "Pulse", "espPulse")
+
+    gsec = Section(pgEsp, "GLOW STYLE", C2, 466, CW, 150)
+    Slider(gsec, "Glow fill", "glowFill", 0, 100, "%")
+    Slider(gsec, "Glow outline", "glowOutline", 0, 100, "%")
+    Toggle(gsec, "Through walls", "glowWalls")
+end
+
 if not hasDrawing then
     label({
         Parent = pgEsp,
-        Position = UDim2.fromOffset(C1, 466),
+        Position = UDim2.fromOffset(C1, 626),
         Size = UDim2.fromOffset(CW * 2 + 26, 30),
         TextSize = 11.5,
         TextColor3 = T.GOLD,
@@ -1594,6 +1661,217 @@ end)
 
 sec = Section(pgVisual, "CAMERA", C2, 4, CW, 100)
 Slider(sec, "Field of view", "fov", 40, 120, nil)
+
+-- ---------------- shaders ----------------
+do
+    if not V then
+        label({
+            Parent = pgShader,
+            Position = UDim2.fromOffset(C1, 8),
+            Size = UDim2.fromOffset(CW * 2 + 26, 60),
+            Font = Enum.Font.Code,
+            TextSize = 11.5,
+            TextColor3 = T.GOLD,
+            TextWrapped = true,
+            Text = "The shared visuals engine could not be downloaded, so shaders, "
+                .. "skyboxes and the music player are unavailable. Check that your "
+                .. "executor allows HttpGet, then reload.",
+        })
+    else
+        local ssec = Section(pgShader, "PRESET", C1, 4, CW, 96)
+        Dropdown(ssec, "Shader", "shader", V.Presets, function(name)
+            V.applyPreset(name)
+            toast("Shader: " .. name, T.OK)
+        end)
+
+        ssec = Section(pgShader, "COLOUR", C1, 108, CW, 160)
+        Slider(ssec, "Saturation", "ccSat", -100, 100, nil, function(v)
+            V.colorCorrection({ saturation = v / 100 })
+        end)
+        Slider(ssec, "Contrast", "ccContrast", -100, 100, nil, function(v)
+            V.colorCorrection({ contrast = v / 100 })
+        end)
+        Slider(ssec, "Brightness", "ccBright", -50, 50, nil, function(v)
+            V.colorCorrection({ brightness = v / 100 })
+        end)
+
+        ssec = Section(pgShader, "EFFECTS", C1, 276, CW, 130)
+        Slider(ssec, "Bloom", "bloomBoost", 0, 100, nil, function(v)
+            V.bloom({ intensity = v / 25, size = 24 + v / 3, threshold = 0.9 })
+        end)
+        Slider(ssec, "Blur", "blurAmount", 0, 40, nil, function(v)
+            V.blur(v)
+        end)
+
+        ssec = Section(pgShader, "ATMOSPHERE", C2, 4, CW, 130)
+        Slider(ssec, "Density", "atmoDensity", 0, 100, nil, function(v)
+            V.atmosphere({ density = v / 200 })
+        end)
+        Slider(ssec, "Haze", "atmoHaze", 0, 100, nil, function(v)
+            V.atmosphere({ haze = v / 20 })
+        end)
+
+        ssec = Section(pgShader, "SKYBOX", C2, 142, CW, 96)
+        Dropdown(ssec, "Sky", "skybox", V.skyboxNames(), function(name)
+            local ok, why = V.setSkybox(name)
+            toast(ok and ("Skybox: " .. why) or ("Skybox failed: " .. tostring(why)),
+                  ok and T.OK or T.ERR)
+        end)
+
+        ssec = Section(pgShader, "CUSTOM SKY", C2, 246, CW, 160)
+        local skyBox = new("TextBox", {
+            Parent = new("Frame", {
+                Parent = ssec,
+                LayoutOrder = 1,
+                Size = UDim2.new(1, 0, 0, 30),
+                BackgroundColor3 = T.BG2,
+                BorderSizePixel = 0,
+            }, { corner(RADIUS), stroke(T.LINE, 0.2) }),
+            Position = UDim2.fromOffset(10, 0),
+            Size = UDim2.new(1, -18, 1, 0),
+            BackgroundTransparency = 1,
+            Font = Enum.Font.Code,
+            TextSize = 11,
+            TextColor3 = T.TXT,
+            PlaceholderText = "skybox asset id",
+            PlaceholderColor3 = T.FAINT,
+            ClearTextOnFocus = false,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Text = "",
+        })
+        Button(ssec, "Apply custom sky", function()
+            local ok, why = V.customSkybox(skyBox.Text)
+            toast(ok and ("Skybox: " .. why) or tostring(why), ok and T.OK or T.ERR)
+        end)
+        Button(ssec, "Restore default sky", function()
+            V.restoreSky()
+            toast("Sky restored", T.DIM)
+        end)
+    end
+end
+
+-- ---------------- audio ----------------
+do
+    if V then
+        local asec = Section(pgAudio, "NOW PLAYING", C1, 4, CW, 120)
+        local npLabel = label({
+            Parent = asec,
+            LayoutOrder = 1,
+            Size = UDim2.new(1, 0, 0, 20),
+            Font = Enum.Font.GothamBold,
+            TextSize = 14,
+            TextColor3 = T.TXT,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            Text = "nothing queued",
+        })
+        local npTime = label({
+            Parent = asec,
+            LayoutOrder = 2,
+            Size = UDim2.new(1, 0, 0, 16),
+            Font = Enum.Font.Code,
+            TextSize = 11,
+            TextColor3 = T.FAINT,
+            Text = "0:00 / 0:00",
+        })
+
+        local function fmt(sec)
+            sec = math.floor(sec or 0)
+            return string.format("%d:%02d", math.floor(sec / 60), sec % 60)
+        end
+
+        task.spawn(function()
+            while gui.Parent do
+                task.wait(0.5)
+                local name, pos, len = V.Music.nowPlaying()
+                npLabel.Text = name
+                npTime.Text = fmt(pos) .. " / " .. fmt(len)
+            end
+        end)
+
+        asec = Section(pgAudio, "CONTROLS", C1, 132, CW, 190)
+        Button(asec, "Play / pause", function()
+            local ok, why = V.Music.toggle()
+            toast(ok and why or tostring(why), ok and T.DIM or T.ERR)
+        end)
+        Button(asec, "Next track", function() V.Music.next() end)
+        Button(asec, "Previous track", function() V.Music.prev() end)
+        Slider(asec, "Volume", "musicVol", 0, 100, "%", function(v)
+            V.Music.setVolume(v)
+        end)
+
+        asec = Section(pgAudio, "PLAYLIST", C2, 4, CW, 210)
+        local idBox = new("TextBox", {
+            Parent = new("Frame", {
+                Parent = asec,
+                LayoutOrder = 1,
+                Size = UDim2.new(1, 0, 0, 30),
+                BackgroundColor3 = T.BG2,
+                BorderSizePixel = 0,
+            }, { corner(RADIUS), stroke(T.LINE, 0.2) }),
+            Position = UDim2.fromOffset(10, 0),
+            Size = UDim2.new(1, -18, 1, 0),
+            BackgroundTransparency = 1,
+            Font = Enum.Font.Code,
+            TextSize = 11,
+            TextColor3 = T.TXT,
+            PlaceholderText = "roblox audio id",
+            PlaceholderColor3 = T.FAINT,
+            ClearTextOnFocus = false,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Text = "",
+        })
+        Button(asec, "Add to playlist", function()
+            local ok, n = V.Music.add("", idBox.Text)
+            toast(ok and ("Added, " .. n .. " in playlist") or "Enter an audio id",
+                  ok and T.OK or T.ERR)
+            idBox.Text = ""
+        end)
+        Button(asec, "Play playlist", function()
+            local ok, why = V.Music.play(1)
+            toast(ok and ("Playing " .. why) or tostring(why), ok and T.OK or T.ERR)
+        end)
+        Button(asec, "Clear playlist", function()
+            V.Music.clear()
+            toast("Playlist cleared", T.DIM)
+        end)
+
+        asec = Section(pgAudio, "SPOTIFY", C2, 224, CW, 200)
+        local tokBox = new("TextBox", {
+            Parent = new("Frame", {
+                Parent = asec,
+                LayoutOrder = 1,
+                Size = UDim2.new(1, 0, 0, 30),
+                BackgroundColor3 = T.BG2,
+                BorderSizePixel = 0,
+            }, { corner(RADIUS), stroke(T.LINE, 0.2) }),
+            Position = UDim2.fromOffset(10, 0),
+            Size = UDim2.new(1, -18, 1, 0),
+            BackgroundTransparency = 1,
+            Font = Enum.Font.Code,
+            TextSize = 10.5,
+            TextColor3 = T.TXT,
+            PlaceholderText = "spotify access token",
+            PlaceholderColor3 = T.FAINT,
+            ClearTextOnFocus = false,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Text = "",
+        })
+        Button(asec, "Set token", function()
+            toast(V.Spotify.setToken(tokBox.Text) and "Spotify token set"
+                or "Token cleared", T.DIM)
+        end)
+        Button(asec, "Now playing", function()
+            local np, err = V.Spotify.nowPlaying()
+            toast(np and (np.track .. "  \u{00B7}  " .. np.artist) or tostring(err),
+                  np and T.OK or T.ERR)
+        end)
+        Button(asec, "Spotify play / pause", function()
+            local np = V.Spotify.nowPlaying()
+            if np and np.playing then V.Spotify.pause() else V.Spotify.play() end
+        end)
+        Button(asec, "Spotify next", function() V.Spotify.next() end)
+    end
+end
 
 -- ---------------- world ----------------
 sec = Section(pgWorld, "PHYSICS", C1, 4, CW, 120)
