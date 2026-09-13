@@ -174,6 +174,7 @@ local S = {
 
     -- traffic
     noTrafficCollide = false, hideTraffic = false, trafficGhost = false,
+    trafficMassless = true, trafficDeep = true,
 
     -- vehicle
     tuneSpeed = false, maxSpeed = 200,
@@ -186,7 +187,8 @@ local S = {
     espOn = true, espNames = true, espSpeed = true, espLevel = false,
     espRank = false, espCash = false, espDistance = true,
     espBox = false, espChams = false, espTracers = false,
-    espMaxDist = 3000, espTextSize = 13, espRefresh = 60,
+    espMaxDist = 3000, espTextSize = 16, espStatSize = 15, espRefresh = 60,
+    espStacked = true,
 
     -- hud
     hudOn = true, hudSpeed = true, hudCash = true, hudSession = true,
@@ -202,6 +204,7 @@ local S = {
 }
 
 local WEBHOOK_URL = ""
+local TRAFFIC_PATH = ""
 
 -- ================================================================
 -- toasts
@@ -306,6 +309,17 @@ local function mphOf(plr)
     return math.floor(speedOf(plr) * mphFactor() + 0.5)
 end
 
+-- type in what the game's own speedometer reads right now and this
+-- works out the factor, instead of guessing at a conversion
+local function calibrateMph(shown, toastFn)
+    local n = tonumber((tostring(shown):gsub("[^%d%.]", "")))
+    if not n or n <= 0 then return false, "enter the number your speedo shows" end
+    local studs = speedOf(LP)
+    if studs < 3 then return false, "drive a bit first, then calibrate" end
+    S.mphFactor = math.clamp(math.floor((n / studs) * 100 + 0.5), 1, 500)
+    return true, string.format("factor set to %.2f", S.mphFactor / 100)
+end
+
 -- ================================================================
 -- stats, looked up by name rather than a hard-coded path
 -- ================================================================
@@ -355,8 +369,11 @@ local SESSION = {
     start = os.time(),
     distance = 0,     -- studs
     topSpeed = 0,     -- mph
+    speedSum = 0,     -- for the running average
+    speedTicks = 0,
     cashStart = nil,
     levelStart = nil,
+    xpStart = nil,
     levelUps = 0,
 }
 
@@ -376,6 +393,13 @@ task.spawn(function()
 
         local m = mphOf(LP)
         if m > SESSION.topSpeed then SESSION.topSpeed = m end
+        if m > 1 then
+            SESSION.speedSum = SESSION.speedSum + m
+            SESSION.speedTicks = SESSION.speedTicks + 1
+        end
+
+        local xp = statOf(LP, "xp")
+        if type(xp) == "number" and SESSION.xpStart == nil then SESSION.xpStart = xp end
 
         local cash = statOf(LP, "cash")
         if type(cash) == "number" then
@@ -416,70 +440,208 @@ local function cashGained()
     return now - SESSION.cashStart
 end
 
+local function xpGained()
+    local now = statOf(LP, "xp")
+    if type(now) ~= "number" or SESSION.xpStart == nil then return 0 end
+    return now - SESSION.xpStart
+end
+
+local function avgSpeed()
+    if SESSION.speedTicks == 0 then return 0 end
+    return math.floor(SESSION.speedSum / SESSION.speedTicks + 0.5)
+end
+
+local function perHour(amount)
+    local hrs = sessionSeconds() / 3600
+    if hrs <= 0.001 then return 0 end
+    return math.floor(amount / hrs + 0.5)
+end
+
 -- ================================================================
 -- traffic
+-- ----------------------------------------------------------------
+-- The old version only looked at workspace's direct children every
+-- 0.4s, which missed traffic nested inside a map folder and let the
+-- game turn collisions back on between passes. This one scans the
+-- whole workspace, caches the parts, and re-applies every frame.
 -- ================================================================
-local function isPlayerVehicle(model)
-    for _, plr in ipairs(Players:GetPlayers()) do
-        local v = vehicleOf(plr)
-        if v and (v == model or model:IsDescendantOf(v)) then return true end
+local TRAFFIC_WORDS = {
+    "traffic", "npc", "aicar", "ai_car", "aivehicle",
+    "car", "truck", "van", "bus", "taxi", "sedan", "suv", "vehicle",
+}
+
+local function looksLikeTraffic(m)
+    local n = m.Name:lower()
+    for _, w in ipairs(TRAFFIC_WORDS) do
+        if n:find(w, 1, true) then return true end
     end
     return false
 end
 
+-- "Map.Traffic" -> workspace.Map.Traffic
+local function resolvePath(path)
+    local node = workspace
+    for seg in tostring(path):gmatch("[^%.]+") do
+        node = node:FindFirstChild(seg)
+        if not node then return nil end
+    end
+    return node
+end
+
+local function playerVehicleSet()
+    local set = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        local v = vehicleOf(plr)
+        if v then set[v] = true end
+        if plr.Character then set[plr.Character] = true end
+    end
+    return set
+end
+
 local function trafficModels()
-    local out = {}
+    local out, seen = {}, {}
+    local mine = playerVehicleSet()
+
+    local function add(m)
+        if not m or seen[m] then return end
+        for owned in pairs(mine) do
+            if m == owned or m:IsDescendantOf(owned) or owned:IsDescendantOf(m) then
+                return
+            end
+        end
+        seen[m] = true
+        table.insert(out, m)
+    end
+
+    -- an explicit path always wins
+    if TRAFFIC_PATH ~= "" then
+        local node = resolvePath(TRAFFIC_PATH)
+        if node then
+            for _, m in ipairs(node:GetChildren()) do add(m) end
+            return out
+        end
+    end
 
     for _, name in ipairs(CFG.TrafficFolders) do
         local folder = workspace:FindFirstChild(name)
         if folder then
-            for _, m in ipairs(folder:GetChildren()) do
-                if m:IsA("Model") then table.insert(out, m) end
-            end
+            for _, m in ipairs(folder:GetChildren()) do add(m) end
         end
     end
 
-    -- anything in workspace that drives but has nobody in it
-    for _, m in ipairs(workspace:GetChildren()) do
-        if m:IsA("Model") and m:FindFirstChildWhichIsA("VehicleSeat", true)
-           and not isPlayerVehicle(m) then
-            table.insert(out, m)
+    if S.trafficDeep then
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d:IsA("Model") and not Players:GetPlayerFromCharacter(d) then
+                if d:FindFirstChildWhichIsA("VehicleSeat", true) or looksLikeTraffic(d) then
+                    add(d)
+                end
+            end
         end
     end
 
     return out
 end
 
-local trafficCache = {}
-task.spawn(function()
-    while gui.Parent do
-        task.wait(0.4)
-        if S.noTrafficCollide or S.hideTraffic or S.trafficGhost then
-            for _, m in ipairs(trafficModels()) do
-                for _, p in ipairs(m:GetDescendants()) do
-                    if p:IsA("BasePart") then
-                        if trafficCache[p] == nil then
-                            trafficCache[p] = { p.CanCollide, p.Transparency }
-                        end
-                        if S.noTrafficCollide then p.CanCollide = false end
-                        if S.hideTraffic then
-                            p.Transparency = 1
-                        elseif S.trafficGhost then
-                            p.Transparency = 0.6
-                        end
-                    end
-                end
-            end
-        elseif next(trafficCache) then
-            for p, old in pairs(trafficCache) do
-                if p and p.Parent then
-                    p.CanCollide = old[1]
-                    p.Transparency = old[2]
-                end
-            end
-            trafficCache = {}
+-- part -> { canCollide, transparency, canTouch, massless }
+local trafficParts = {}
+
+local function restoreTraffic()
+    for p, old in pairs(trafficParts) do
+        if p and p.Parent then
+            p.CanCollide = old[1]
+            p.Transparency = old[2]
+            p.CanTouch = old[3]
+            p.Massless = old[4]
         end
     end
+    trafficParts = {}
+end
+
+local function trafficActive()
+    return S.noTrafficCollide or S.hideTraffic or S.trafficGhost
+end
+
+local function rescanTraffic()
+    local live = {}
+    for _, m in ipairs(trafficModels()) do
+        for _, p in ipairs(m:GetDescendants()) do
+            if p:IsA("BasePart") then
+                live[p] = true
+                if trafficParts[p] == nil then
+                    trafficParts[p] = { p.CanCollide, p.Transparency, p.CanTouch, p.Massless }
+                end
+            end
+        end
+        if m:IsA("BasePart") then
+            live[m] = true
+            if trafficParts[m] == nil then
+                trafficParts[m] = { m.CanCollide, m.Transparency, m.CanTouch, m.Massless }
+            end
+        end
+    end
+
+    -- drop anything that despawned
+    for p in pairs(trafficParts) do
+        if not live[p] or not p.Parent then trafficParts[p] = nil end
+    end
+end
+
+-- transparency only needs setting when something changes
+local function applyTrafficLook()
+    for p, old in pairs(trafficParts) do
+        if p and p.Parent then
+            if S.hideTraffic then
+                p.Transparency = 1
+            elseif S.trafficGhost then
+                p.Transparency = 0.65
+            else
+                p.Transparency = old[2]
+            end
+        end
+    end
+end
+
+local wasActive = false
+task.spawn(function()
+    while gui.Parent do
+        task.wait(1.5)
+        if trafficActive() then
+            rescanTraffic()
+            applyTrafficLook()
+            wasActive = true
+        elseif wasActive then
+            restoreTraffic()
+            wasActive = false
+        end
+    end
+end)
+
+-- collisions get re-enabled by the game, so hold them down every frame
+RunService.Stepped:Connect(function()
+    if not S.noTrafficCollide then return end
+    for p in pairs(trafficParts) do
+        if p.Parent then
+            if p.CanCollide then p.CanCollide = false end
+            p.CanTouch = false
+            if S.trafficMassless then p.Massless = true end
+        end
+    end
+end)
+
+-- catch cars that spawn in after a scan
+workspace.DescendantAdded:Connect(function(d)
+    if not trafficActive() then return end
+    if not d:IsA("BasePart") then return end
+    local m = d:FindFirstAncestorWhichIsA("Model")
+    if not m or Players:GetPlayerFromCharacter(m) then return end
+    if not (m:FindFirstChildWhichIsA("VehicleSeat", true) or looksLikeTraffic(m)) then return end
+    if vehicleOf() == m then return end
+
+    if trafficParts[d] == nil then
+        trafficParts[d] = { d.CanCollide, d.Transparency, d.CanTouch, d.Massless }
+    end
+    if S.hideTraffic then d.Transparency = 1
+    elseif S.trafficGhost then d.Transparency = 0.65 end
 end)
 
 -- ================================================================
@@ -599,19 +761,29 @@ end
 
 local esp = {}
 
+local ESP_LINES = 5
+
 local function buildEsp()
     if not hasDrawing then return nil end
-    return {
+    local o = {
         box  = drawing("Square", { Thickness = 1, Filled = false, Visible = false }),
-        name = drawing("Text", { Size = 13, Center = true, Outline = true, Visible = false }),
-        info = drawing("Text", { Size = 11, Center = true, Outline = true, Visible = false }),
+        name = drawing("Text", { Size = 16, Center = true, Outline = true, Visible = false }),
         line = drawing("Line", { Thickness = 1, Visible = false }),
+        stats = {},
     }
+    for i = 1, ESP_LINES do
+        o.stats[i] = drawing("Text", {
+            Size = 15, Center = true, Outline = true, Visible = false })
+    end
+    return o
 end
 
 local function hideEsp(o)
     if not o then return end
-    for _, d in pairs(o) do d.Visible = false end
+    o.box.Visible = false
+    o.name.Visible = false
+    o.line.Visible = false
+    for _, d in ipairs(o.stats) do d.Visible = false end
 end
 
 local function chams(plr, show)
@@ -636,7 +808,13 @@ end
 local function killEsp(plr)
     local o = esp[plr]
     if o then
-        for _, d in pairs(o) do pcall(function() d:Remove() end) end
+        for k, d in pairs(o) do
+            if k == "stats" then
+                for _, sd in ipairs(d) do pcall(function() sd:Remove() end) end
+            else
+                pcall(function() d:Remove() end)
+            end
+        end
         esp[plr] = nil
     end
     local c = plr.Character
@@ -686,38 +864,52 @@ RunService.RenderStepped:Connect(function(dt)
                             o.box.Position = Vector2.new(x, y)
                         end
 
+                        -- everything sits above the head: name on top,
+                        -- then one line per enabled stat
+                        local bits = {}
+                        if S.espSpeed then table.insert(bits, mphOf(plr) .. " MPH") end
+                        if S.espLevel then
+                            local v = statText(plr, "level")
+                            table.insert(bits, "LVL " .. (v or "?"))
+                        end
+                        if S.espRank then
+                            local v = statText(plr, "rank")
+                            table.insert(bits, (v or "no rank"):upper())
+                        end
+                        if S.espCash then
+                            local v = statText(plr, "cash")
+                            table.insert(bits, "$" .. (v or "?"))
+                        end
+                        if S.espDistance then table.insert(bits, dist .. "m") end
+
+                        if not S.espStacked and #bits > 0 then
+                            bits = { table.concat(bits, "   ") }
+                        end
+
+                        local nameH = S.espNames and (S.espTextSize + 3) or 0
+                        local lineH = S.espStatSize + 2
+                        local top = y - (nameH + #bits * lineH) - 6
+
                         o.name.Visible = S.espNames
                         if S.espNames then
                             o.name.Color = T.RED
                             o.name.Size = S.espTextSize
                             o.name.Text = plr.DisplayName
-                            o.name.Position = Vector2.new(pos.X, y - S.espTextSize - 3)
+                            o.name.Position = Vector2.new(pos.X, top)
                         end
 
-                        -- the detail line is assembled from whichever
-                        -- toggles are on
-                        local bits = {}
-                        if S.espSpeed then table.insert(bits, mphOf(plr) .. " mph") end
-                        if S.espLevel then
-                            local v = statText(plr, "level")
-                            table.insert(bits, v and ("lvl " .. v) or "lvl ?")
-                        end
-                        if S.espRank then
-                            local v = statText(plr, "rank")
-                            table.insert(bits, v or "rank ?")
-                        end
-                        if S.espCash then
-                            local v = statText(plr, "cash")
-                            table.insert(bits, v and ("$" .. v) or "$?")
-                        end
-                        if S.espDistance then table.insert(bits, dist .. "m") end
-
-                        o.info.Visible = #bits > 0
-                        if o.info.Visible then
-                            o.info.Color = T.DIM
-                            o.info.Size = S.espTextSize - 2
-                            o.info.Text = table.concat(bits, "  ")
-                            o.info.Position = Vector2.new(pos.X, y + h + 2)
+                        for i = 1, ESP_LINES do
+                            local d = o.stats[i]
+                            if bits[i] then
+                                d.Visible = true
+                                d.Color = T.TXT
+                                d.Size = S.espStatSize
+                                d.Text = bits[i]
+                                d.Position = Vector2.new(pos.X,
+                                    top + nameH + (i - 1) * lineH)
+                            else
+                                d.Visible = false
+                            end
                         end
 
                         o.line.Visible = S.espTracers
@@ -874,6 +1066,8 @@ local function sessionEmbed(title)
                 { name = "Top speed", value = SESSION.topSpeed .. " mph", inline = true },
                 { name = "Cash", value = "$" .. cash, inline = true },
                 { name = "Earned", value = "$" .. comma(cashGained()), inline = true },
+                { name = "Cash / hr", value = "$" .. comma(perHour(cashGained())), inline = true },
+                { name = "Avg speed", value = avgSpeed() .. " mph", inline = true },
                 { name = "Level", value = tostring(lvl), inline = true },
                 { name = "Rank", value = tostring(rank), inline = true },
                 { name = "Level ups", value = tostring(SESSION.levelUps), inline = true },
@@ -1830,22 +2024,58 @@ L, R = makeSub("Driving", "Traffic")
 
 g = Group(L, "traffic")
 Toggle(g, "No Traffic Collision", "noTrafficCollide", {
-    desc = "Drive straight through AI cars" })
-Toggle(g, "Ghost Traffic", "trafficGhost", {
-    desc = "Makes traffic see-through so you can read the road" })
-Toggle(g, "Hide Traffic", "hideTraffic")
+    desc = "Held down every frame so the game cannot switch it back on",
+    callback = function(on)
+        if on then rescanTraffic() end
+        toast(on and "Traffic collision off" or "Traffic collision restored",
+              on and T.OK or T.DIM)
+    end })
+Toggle(g, "Hide Cars", "hideTraffic", {
+    desc = "Makes traffic fully invisible",
+    callback = function() rescanTraffic(); applyTrafficLook() end })
+Toggle(g, "Ghost Cars", "trafficGhost", {
+    desc = "Semi-transparent instead of gone",
+    callback = function() rescanTraffic(); applyTrafficLook() end })
+Toggle(g, "Massless Traffic", "trafficMassless", {
+    desc = "Stops traffic shoving you even when it does touch" })
+
+g = Group(L, "detection")
+Toggle(g, "Deep Scan", "trafficDeep", {
+    desc = "Search the whole workspace, not just named folders" })
+local pathBox = TextField(g, "path under workspace, eg Map.Traffic", function(txt)
+    TRAFFIC_PATH = txt or ""
+    rescanTraffic()
+    toast(TRAFFIC_PATH == "" and "Using automatic detection"
+        or ("Traffic path: " .. TRAFFIC_PATH), T.OK)
+end)
 
 g = Group(R, "detected")
 local trafficCount = Readout(g, "traffic models")
+local trafficPartCount = Readout(g, "parts held")
 local trafficFolders = Readout(g, "folders matched")
 Button(g, "Rescan Now", function()
-    trafficCount.Text = tostring(#trafficModels())
+    local models = trafficModels()
+    rescanTraffic()
+    applyTrafficLook()
+
+    local n = 0
+    for _ in pairs(trafficParts) do n = n + 1 end
+
+    trafficCount.Text = tostring(#models)
+    trafficPartCount.Text = tostring(n)
+
     local found = {}
-    for _, n in ipairs(CFG.TrafficFolders) do
-        if workspace:FindFirstChild(n) then table.insert(found, n) end
+    for _, nm in ipairs(CFG.TrafficFolders) do
+        if workspace:FindFirstChild(nm) then table.insert(found, nm) end
     end
+    if TRAFFIC_PATH ~= "" then table.insert(found, TRAFFIC_PATH .. " (manual)") end
     trafficFolders.Text = #found > 0 and table.concat(found, ", ") or "none"
-    toast("Traffic rescanned", T.DIM)
+
+    toast(#models .. " traffic models, " .. n .. " parts", #models > 0 and T.OK or T.ERR)
+end)
+Button(g, "Restore Traffic", function()
+    restoreTraffic()
+    toast("Traffic restored", T.DIM)
 end)
 
 -- ================================================================
@@ -1880,9 +2110,14 @@ Toggle(g, "Infinite Fuel", "infFuel", {
     desc = "Refills any value named fuel, gas or petrol" })
 
 g = Group(R, "speedometer")
-Slider(g, "MPH Factor", "mphFactor", 10, 200, nil, function()
-    toast("Tune until it matches the game's speedo", T.DIM)
+local rawSpeed = Readout(g, "raw studs/sec")
+local shownSpeed = Readout(g, "reported mph")
+local calBox = TextField(g, "what the game's speedo reads now")
+Button(g, "Calibrate From That", function()
+    local ok, why = calibrateMph(calBox.Text)
+    toast(ok and ("Calibrated \u{2014} " .. why) or why, ok and T.OK or T.ERR)
 end)
+Slider(g, "MPH Factor", "mphFactor", 1, 500, nil)
 
 -- ================================================================
 -- VISUALS
@@ -1904,8 +2139,11 @@ Toggle(g, "Cash", "espCash")
 Toggle(g, "Distance", "espDistance")
 
 g = Group(R, "esp options")
+Toggle(g, "Stack Stats", "espStacked", {
+    desc = "One stat per line above the head, instead of a single row" })
+Slider(g, "Name Size", "espTextSize", 10, 42)
+Slider(g, "Stat Size", "espStatSize", 10, 40)
 Slider(g, "Max Distance", "espMaxDist", 200, 8000, "studs")
-Slider(g, "Text Size", "espTextSize", 9, 22)
 Slider(g, "Refresh Rate", "espRefresh", 10, 240, "hz")
 
 -- ---------------- HUD ----------------
@@ -1935,7 +2173,13 @@ g = Group(L, "session")
 local stTime = Readout(g, "time played")
 local stDist = Readout(g, "distance")
 local stTop = Readout(g, "top speed")
+local stAvg = Readout(g, "average speed")
+
+g = Group(L, "session earnings")
 local stEarned = Readout(g, "cash earned")
+local stCashHr = Readout(g, "cash / hour")
+local stXpGain = Readout(g, "xp gained")
+local stXpHr = Readout(g, "xp / hour")
 local stLevelUps = Readout(g, "level ups")
 
 g = Group(R, "account")
@@ -1949,7 +2193,10 @@ Button(g, "Reset Session", function()
     SESSION.start = os.time()
     SESSION.distance = 0
     SESSION.topSpeed = 0
+    SESSION.speedSum = 0
+    SESSION.speedTicks = 0
     SESSION.cashStart = statOf(LP, "cash")
+    SESSION.xpStart = statOf(LP, "xp")
     SESSION.levelUps = 0
     toast("Session reset", T.DIM)
 end)
@@ -1958,11 +2205,15 @@ Button(g, "Copy Session Report", function()
     local cash = statText(LP, "cash") or "?"
     pcall(setclipboard, table.concat({
         CFG.Script .. " session",
-        "time      " .. clockText(sessionSeconds()),
-        "distance  " .. string.format("%.1f mi", milesDriven()),
-        "top speed " .. SESSION.topSpeed .. " mph",
-        "earned    $" .. comma(cashGained()),
-        "cash      $" .. cash,
+        "time       " .. clockText(sessionSeconds()),
+        "distance   " .. string.format("%.1f mi", milesDriven()),
+        "top speed  " .. SESSION.topSpeed .. " mph",
+        "avg speed  " .. avgSpeed() .. " mph",
+        "earned     $" .. comma(cashGained()),
+        "cash/hour  $" .. comma(perHour(cashGained())),
+        "xp gained  " .. comma(xpGained()),
+        "level ups  " .. SESSION.levelUps,
+        "cash       $" .. cash,
     }, "\n"))
     toast("Session report copied", T.OK)
 end)
@@ -2095,9 +2346,7 @@ Button(g, "Rejoin Server", function()
 end)
 Button(g, "Unload", function()
     for _, plr in ipairs(Players:GetPlayers()) do killEsp(plr) end
-    for p, old in pairs(trafficCache) do
-        if p and p.Parent then p.CanCollide = old[1]; p.Transparency = old[2] end
-    end
+    restoreTraffic()
     gui:Destroy()
 end)
 
@@ -2203,8 +2452,15 @@ task.spawn(function()
         stTime.Text = clockText(sessionSeconds())
         stDist.Text = string.format("%.2f mi", milesDriven())
         stTop.Text = SESSION.topSpeed .. " mph"
+        stAvg.Text = avgSpeed() .. " mph"
         stEarned.Text = "$" .. comma(cashGained())
+        stCashHr.Text = "$" .. comma(perHour(cashGained()))
+        stXpGain.Text = comma(xpGained())
+        stXpHr.Text = comma(perHour(xpGained()))
         stLevelUps.Text = tostring(SESSION.levelUps)
+
+        rawSpeed.Text = string.format("%.1f", speedOf(LP))
+        shownSpeed.Text = mphOf(LP) .. " mph"
 
         stCash.Text = statText(LP, "cash") and ("$" .. statText(LP, "cash")) or "not found"
         stLevel.Text = statText(LP, "level") or "not found"
