@@ -1,0 +1,24 @@
+On The Loader:
+Cobalt: -- [[ Rscripts Risk Notice ]]
+-- This script is not verified by rscripts.net. Deal with caution.
+--
+-- Stay safe:
+--   • Never log in on unofficial Roblox sites or lookalike domains.
+--   • Real Roblox links use roblox.com (check the .com ending).
+--   • Treat fake Roblox login / "claim reward" pages as phishing.
+-- [[ End Rscripts Risk Notice ]]
+loadstring(game:HttpGet("https://gitlab.com/upio/cobalt/-/releases/permalink/latest/downloads/Cobalt.luau"))()
+
+Dex++ :  loadstring(game:HttpGet("https://github.com/AZYsGithub/DexPlusPlus/releases/latest/download/out.lua"))() 
+
+Infinite Yield: loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))()
+
+For The unsupported games:
+
+Bedwars: loadstring(game:HttpGet("https://api.catvape.dev/script?key=iqMLz5EBqfsCI7JDsAHzp6X9q2hEKyWB0QJsg3QjW7suzD38"))({
+    Closet = false, -- you can set this to true or false -> it disables all notifications
+})
+
+Blade Ball: loadstring(game:HttpGet("https://rawscripts.net/raw/Blade-Ball-Snowy-Hub-Auto-Parry-Auto-Evade-Auto-Cast-More-245541"))()
+
+Basketball Zero: loadstring(game:HttpGet("https://rawscripts.net/raw/UPD-Basketball:-Zero-Rice-Hub-210988"))()

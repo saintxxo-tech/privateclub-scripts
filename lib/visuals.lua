@@ -135,20 +135,55 @@ local defaults = {
     globalShadows = Lighting.GlobalShadows,
 }
 
+local adoptedAtmo, atmoOriginal
+
 local function fx(class, name)
     if FX[name] and FX[name].Parent then return FX[name] end
-    local inst = Instance.new(class)
-    inst.Name = "pc_" .. name
-    inst.Parent = Lighting
+
+    -- only one Atmosphere may exist under Lighting, so reuse the
+    -- game's rather than trying to add a second
+    if class == "Atmosphere" then
+        local existing = Lighting:FindFirstChildOfClass("Atmosphere")
+        if existing then
+            if not atmoOriginal then
+                atmoOriginal = {
+                    Density = existing.Density, Offset = existing.Offset,
+                    Haze = existing.Haze, Glare = existing.Glare,
+                    Color = existing.Color, Decay = existing.Decay,
+                }
+                adoptedAtmo = existing
+            end
+            FX[name] = existing
+            return existing
+        end
+    end
+
+    local ok, inst = pcall(function()
+        local i = Instance.new(class)
+        i.Name = "pc_" .. name
+        i.Parent = Lighting
+        return i
+    end)
+    if not ok or not inst then return nil end
+
     FX[name] = inst
     return inst
 end
 
 function V.clearShaders()
     for _, inst in pairs(FX) do
-        if inst and inst.Parent then inst:Destroy() end
+        if inst and inst.Parent and inst ~= adoptedAtmo then
+            pcall(function() inst:Destroy() end)
+        end
     end
     FX = {}
+
+    -- the game's own Atmosphere is borrowed, not ours to delete
+    if adoptedAtmo and adoptedAtmo.Parent and atmoOriginal then
+        for k, v in pairs(atmoOriginal) do
+            pcall(function() adoptedAtmo[k] = v end)
+        end
+    end
     Lighting.Brightness = defaults.brightness
     Lighting.Ambient = defaults.ambient
     Lighting.OutdoorAmbient = defaults.outdoor
@@ -163,6 +198,7 @@ end
 -- individual controls, safe to call every frame
 function V.colorCorrection(opts)
     local c = fx("ColorCorrectionEffect", "cc")
+    if not c then return nil end
     if opts.brightness then c.Brightness = opts.brightness end
     if opts.contrast then c.Contrast = opts.contrast end
     if opts.saturation then c.Saturation = opts.saturation end
@@ -173,6 +209,7 @@ end
 
 function V.bloom(opts)
     local b = fx("BloomEffect", "bloom")
+    if not b then return nil end
     if opts.intensity then b.Intensity = opts.intensity end
     if opts.size then b.Size = opts.size end
     if opts.threshold then b.Threshold = opts.threshold end
@@ -182,6 +219,7 @@ end
 
 function V.sunRays(opts)
     local s = fx("SunRaysEffect", "sun")
+    if not s then return nil end
     if opts.intensity then s.Intensity = opts.intensity end
     if opts.spread then s.Spread = opts.spread end
     s.Enabled = true
@@ -190,6 +228,7 @@ end
 
 function V.depthOfField(opts)
     local d = fx("DepthOfFieldEffect", "dof")
+    if not d then return nil end
     if opts.focus then d.FocusDistance = opts.focus end
     if opts.inFocus then d.InFocusRadius = opts.inFocus end
     if opts.far then d.FarIntensity = opts.far end
@@ -200,6 +239,7 @@ end
 
 function V.blur(size)
     local b = fx("BlurEffect", "blur")
+    if not b then return nil end
     b.Size = size or 0
     b.Enabled = (size or 0) > 0
     return b
@@ -207,6 +247,7 @@ end
 
 function V.atmosphere(opts)
     local a = fx("Atmosphere", "atmo")
+    if not a then return nil end
     if opts.density then a.Density = opts.density end
     if opts.offset then a.Offset = opts.offset end
     if opts.haze then a.Haze = opts.haze end
@@ -225,6 +266,20 @@ V.Presets = {
 function V.applyPreset(name)
     V.clearShaders()
     if name == "Off" then return true, "shaders off" end
+
+    -- each effect is isolated: one failure must not abandon the rest
+    local failed = {}
+    local function try(what, fn)
+        local ok, err = pcall(fn)
+        if not ok then table.insert(failed, what .. ": " .. tostring(err)) end
+    end
+    local cc, bloom_, sun, dof, atmo =
+        V.colorCorrection, V.bloom, V.sunRays, V.depthOfField, V.atmosphere
+    V.colorCorrection = function(o) try("colour", function() cc(o) end) end
+    V.bloom           = function(o) try("bloom", function() bloom_(o) end) end
+    V.sunRays         = function(o) try("sun", function() sun(o) end) end
+    V.depthOfField    = function(o) try("dof", function() dof(o) end) end
+    V.atmosphere      = function(o) try("atmosphere", function() atmo(o) end) end
 
     if name == "Vivid" then
         V.colorCorrection({ saturation = 0.42, contrast = 0.18, brightness = 0.02 })
@@ -295,6 +350,12 @@ function V.applyPreset(name)
         Lighting.Brightness = 1.2
     end
 
+    V.colorCorrection, V.bloom, V.sunRays, V.depthOfField, V.atmosphere =
+        cc, bloom_, sun, dof, atmo
+
+    if #failed > 0 then
+        return true, name .. " (" .. #failed .. " effect(s) unavailable)"
+    end
     return true, name
 end
 
@@ -310,6 +371,51 @@ function V.fullbright(on)
         Lighting.OutdoorAmbient = defaults.outdoor
         Lighting.GlobalShadows = defaults.globalShadows
     end
+end
+
+function V.diagnose()
+    local lines = {}
+    table.insert(lines, "visuals engine  v" .. V.Version)
+
+    local ok, tech = pcall(function() return tostring(Lighting.Technology) end)
+    table.insert(lines, "lighting tech   " .. (ok and tech or "unknown"))
+    table.insert(lines, "brightness      " .. tostring(Lighting.Brightness))
+    table.insert(lines, "clock time      " .. string.format("%.1f", Lighting.ClockTime))
+
+    local ours, theirs = {}, {}
+    for _, c in ipairs(Lighting:GetChildren()) do
+        if c:IsA("PostEffect") or c:IsA("Atmosphere") or c:IsA("Sky") then
+            local entry = c.ClassName .. "(" .. c.Name .. ")"
+            if c.Name:sub(1, 3) == "pc_" then
+                table.insert(ours, entry)
+            else
+                table.insert(theirs, entry)
+            end
+        end
+    end
+    table.insert(lines, "our effects     " ..
+        (#ours > 0 and table.concat(ours, ", ") or "none"))
+    table.insert(lines, "game effects    " ..
+        (#theirs > 0 and table.concat(theirs, ", ") or "none"))
+    table.insert(lines, "adopted atmo    " .. tostring(adoptedAtmo ~= nil))
+
+    -- can we even create one?
+    local made = Instance.new("ColorCorrectionEffect")
+    local okParent = pcall(function() made.Parent = Lighting end)
+    table.insert(lines, "can add effects " .. tostring(okParent))
+    pcall(function() made:Destroy() end)
+
+    return table.concat(lines, "\n")
+end
+
+-- unmistakable, for checking the pipeline end to end
+function V.testShader()
+    V.clearShaders()
+    local c = V.colorCorrection({
+        saturation = -1, contrast = 0.6, brightness = 0.1,
+        tint = Color3.fromRGB(255, 80, 80) })
+    V.blur(12)
+    return c ~= nil
 end
 
 -- ================================================================

@@ -180,6 +180,15 @@ local S = {
 
     musicVol = 50, musicLoop = false, musicShuffle = false,
 
+    -- combat
+    aimbot = false, aimPart = "Head", aimKey = "Right Mouse",
+    aimFov = 160, aimSmooth = 12, aimWall = true, aimTeam = false,
+    aimVisibleOnly = true,
+    fovShow = false, fovFilled = false, fovThick = 1,
+    silentAim = false, silentChance = 100, logRemotes = false,
+    trigger = false, triggerDelay = 12, triggerHoldKey = true,
+    hitboxOn = false, hitboxSize = 6,
+
     -- visuals
     fullbright = false, noFog = false, xray = false, fov = 70,
 
@@ -1460,6 +1469,7 @@ local pgEsp    = makePage()
 local pgVisual = makePage()
 local pgWorld  = makePage()
 local pgMisc   = makePage()
+local pgCombat = makePage()
 local pgShader = makePage()
 local pgAudio  = makePage()
 
@@ -1524,6 +1534,7 @@ addTab("ESP", pgEsp)
 addTab("Visuals", pgVisual)
 addTab("World", pgWorld)
 addTab("Misc", pgMisc)
+addTab("Combat", pgCombat)
 addTab("Shaders", pgShader)
 addTab("Audio", pgAudio)
 
@@ -1661,6 +1672,292 @@ end)
 
 sec = Section(pgVisual, "CAMERA", C2, 4, CW, 100)
 Slider(sec, "Field of view", "fov", 40, 120, nil)
+
+-- ---------------- combat ----------------
+do
+    local AIM_KEYS = {
+        ["Right Mouse"] = Enum.UserInputType.MouseButton2,
+        ["Left Mouse"]  = Enum.UserInputType.MouseButton1,
+        ["Q"] = Enum.KeyCode.Q, ["E"] = Enum.KeyCode.E,
+        ["V"] = Enum.KeyCode.V, ["C"] = Enum.KeyCode.C,
+    }
+
+    local holding = false
+    local locked                       -- the part we are currently on
+    local silentRemote = ""
+
+    local function centre()
+        return Vector2.new(CAM.ViewportSize.X / 2, CAM.ViewportSize.Y / 2)
+    end
+
+    local function aimingNow()
+        return S.aimKey == "Always" or holding
+    end
+
+    local function partOf(plr)
+        local c = plr.Character
+        if not c then return nil end
+        if S.aimPart == "Torso" then
+            return c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Head")
+        end
+        return c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function canSee(part)
+        if not S.aimWall then return true end
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { character() }
+        local from = CAM.CFrame.Position
+        local res = workspace:Raycast(from, part.Position - from, params)
+        return (not res) or res.Instance:IsDescendantOf(part.Parent)
+    end
+
+    local function bestTarget()
+        local best, bestD
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LP and marks[plr] ~= "ally" then
+                local skip = S.aimTeam and plr.Team == LP.Team
+                local c = plr.Character
+                local hum = c and c:FindFirstChildOfClass("Humanoid")
+                local part = partOf(plr)
+                if part and hum and hum.Health > 0 and not skip then
+                    local pos, on = CAM:WorldToViewportPoint(part.Position)
+                    if on then
+                        local d = (Vector2.new(pos.X, pos.Y) - centre()).Magnitude
+                        if d <= S.aimFov and (not bestD or d < bestD) then
+                            if not S.aimVisibleOnly or canSee(part) then
+                                best, bestD = part, d
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    -- ---------------- aim key ----------------
+    UserInputService.InputBegan:Connect(function(i, typing)
+        if typing then return end
+        local want = AIM_KEYS[S.aimKey]
+        if not want then return end
+        if i.UserInputType == want or i.KeyCode == want then holding = true end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        local want = AIM_KEYS[S.aimKey]
+        if not want then return end
+        if i.UserInputType == want or i.KeyCode == want then holding = false end
+    end)
+
+    -- ---------------- fov ring + camera lock ----------------
+    local ring
+    if hasDrawing then
+        local ok, d = pcall(function() return Drawing.new("Circle") end)
+        if ok then
+            ring = d
+            ring.Thickness = 1
+            ring.NumSides = 64
+            ring.Filled = false
+            ring.Visible = false
+            ring.Transparency = 0.9
+        end
+    end
+
+    RunService.RenderStepped:Connect(function(dt)
+        if ring then
+            if S.fovShow then
+                ring.Visible = true
+                ring.Color = T.RED
+                ring.Filled = S.fovFilled
+                ring.Transparency = S.fovFilled and 0.12 or 0.9
+                ring.Thickness = S.fovThick
+                ring.Radius = S.aimFov
+                ring.Position = centre()
+            else
+                ring.Visible = false
+            end
+        end
+
+        if not S.aimbot or not aimingNow() then
+            locked = nil
+            return
+        end
+
+        locked = bestTarget()
+        if not locked then return end
+
+        -- ease toward the target rather than snapping onto it
+        local goal = CFrame.lookAt(CAM.CFrame.Position, locked.Position)
+        local alpha = math.clamp(dt * (S.aimSmooth / 2), 0, 1)
+        CAM.CFrame = CAM.CFrame:Lerp(goal, alpha)
+    end)
+
+    -- ---------------- silent aim ----------------
+    local function looksLikeCombatRemote(self)
+        if silentRemote ~= "" then
+            return tostring(self.Name):lower():find(silentRemote:lower(), 1, true) ~= nil
+        end
+        local n = tostring(self.Name):lower()
+        for _, w in ipairs({ "shoot", "fire", "hit", "damage", "attack",
+                             "bullet", "raycast", "swing", "kill" }) do
+            if n:find(w, 1, true) then return true end
+        end
+        return false
+    end
+
+    do
+        local hook = rawget(getfenv(), "hookmetamethod")
+        local getMethod = rawget(getfenv(), "getnamecallmethod")
+        if type(hook) == "function" and type(getMethod) == "function" then
+            local old
+            old = hook(game, "__namecall", function(self, ...)
+                local method = getMethod()
+                if (method == "FireServer" or method == "InvokeServer")
+                   and typeof(self) == "Instance" and looksLikeCombatRemote(self) then
+
+                    if S.logRemotes then
+                        local kinds = {}
+                        for i, v in ipairs({ ... }) do kinds[i] = typeof(v) end
+                        print("[privateclub] remote: " .. self:GetFullName()
+                            .. "  (" .. table.concat(kinds, ", ") .. ")")
+                    end
+
+                    if S.silentAim and math.random(1, 100) <= S.silentChance then
+                        local target = bestTarget()
+                        if target then
+                            local args = { ... }
+                            local changed = false
+                            for i, v in ipairs(args) do
+                                local t = typeof(v)
+                                if t == "Vector3" then
+                                    args[i] = target.Position; changed = true
+                                elseif t == "CFrame" then
+                                    args[i] = CFrame.new(target.Position); changed = true
+                                elseif t == "Instance" and v:IsA("BasePart") then
+                                    args[i] = target; changed = true
+                                end
+                            end
+                            if changed then return old(self, unpack(args)) end
+                        end
+                    end
+                end
+                return old(self, ...)
+            end)
+        end
+    end
+
+    -- ---------------- triggerbot ----------------
+    task.spawn(function()
+        local VIM = game:GetService("VirtualInputManager")
+        while gui.Parent do
+            task.wait(math.max(S.triggerDelay, 3) / 100)
+            if S.trigger and (not S.triggerHoldKey or aimingNow()) then
+                local t = bestTarget()
+                if t then
+                    local pos, on = CAM:WorldToViewportPoint(t.Position)
+                    if on and (Vector2.new(pos.X, pos.Y) - centre()).Magnitude <= 14 then
+                        pcall(function()
+                            VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
+                            task.wait(0.03)
+                            VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
+                        end)
+                    end
+                end
+            end
+        end
+    end)
+
+    -- ---------------- hitbox ----------------
+    local hitboxCache = {}
+    task.spawn(function()
+        while gui.Parent do
+            task.wait(0.3)
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= LP and plr.Character then
+                    local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        if S.hitboxOn then
+                            if not hitboxCache[hrp] then hitboxCache[hrp] = hrp.Size end
+                            hrp.Size = Vector3.new(S.hitboxSize, S.hitboxSize, S.hitboxSize)
+                            hrp.Transparency = 0.75
+                            hrp.Material = Enum.Material.ForceField
+                            hrp.CanCollide = false
+                        elseif hitboxCache[hrp] then
+                            hrp.Size = hitboxCache[hrp]
+                            hrp.Transparency = 1
+                            hitboxCache[hrp] = nil
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    -- ---------------- ui ----------------
+    local csec = Section(pgCombat, "AIMBOT", C1, 4, CW, 262)
+    Toggle(csec, "Enable aimbot", "aimbot", function(on)
+        toast(on and "Aimbot armed" or "Aimbot off", on and T.OK or T.DIM)
+    end)
+    Dropdown(csec, "Target part", "aimPart", { "Head", "Torso" })
+    Slider(csec, "Aim FOV", "aimFov", 20, 700, "px")
+    Slider(csec, "Smoothness", "aimSmooth", 1, 40)
+    Toggle(csec, "Wall check", "aimWall")
+    Toggle(csec, "Team check", "aimTeam")
+
+    csec = Section(pgCombat, "AIM KEY", C1, 274, CW, 96)
+    Dropdown(csec, "Hold to aim", "aimKey",
+        { "Right Mouse", "Left Mouse", "Q", "E", "V", "C", "Always" })
+
+    csec = Section(pgCombat, "FOV CIRCLE", C1, 378, CW, 150)
+    Toggle(csec, "Show FOV", "fovShow")
+    Toggle(csec, "Filled", "fovFilled")
+    Slider(csec, "Thickness", "fovThick", 1, 6)
+
+    csec = Section(pgCombat, "SILENT AIM", C2, 4, CW, 190)
+    Toggle(csec, "Enable silent aim", "silentAim", function(on)
+        if on then toast("Silent aim on \u{2014} check the remote filter if nothing lands", T.GOLD) end
+    end)
+    Slider(csec, "Hit chance", "silentChance", 1, 100, "%")
+    Toggle(csec, "Log combat remotes", "logRemotes")
+
+    do
+        local box = new("TextBox", {
+            Parent = new("Frame", {
+                Parent = Section(pgCombat, "REMOTE FILTER", C2, 202, CW, 100),
+                LayoutOrder = 1,
+                Size = UDim2.new(1, 0, 0, 30),
+                BackgroundColor3 = T.BG2,
+                BorderSizePixel = 0,
+            }, { corner(RADIUS), stroke(T.LINE, 0.2) }),
+            Position = UDim2.fromOffset(10, 0),
+            Size = UDim2.new(1, -18, 1, 0),
+            BackgroundTransparency = 1,
+            Font = Enum.Font.Code,
+            TextSize = 11,
+            TextColor3 = T.TXT,
+            PlaceholderText = "remote name, blank = auto",
+            PlaceholderColor3 = T.FAINT,
+            ClearTextOnFocus = false,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Text = "",
+        })
+        box.FocusLost:Connect(function()
+            silentRemote = box.Text or ""
+            toast(silentRemote == "" and "Remote filter cleared"
+                or ("Remote filter: " .. silentRemote), T.OK)
+        end)
+    end
+
+    csec = Section(pgCombat, "TRIGGERBOT", C2, 310, CW, 150)
+    Toggle(csec, "Enable triggerbot", "trigger")
+    Toggle(csec, "Only while aiming", "triggerHoldKey")
+    Slider(csec, "Fire delay", "triggerDelay", 3, 100, "cs")
+
+    csec = Section(pgCombat, "HITBOX", C2, 468, CW, 130)
+    Toggle(csec, "Hitbox expander", "hitboxOn")
+    Slider(csec, "Hitbox size", "hitboxSize", 2, 30, "studs")
+end
 
 -- ---------------- shaders ----------------
 do

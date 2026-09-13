@@ -36,6 +36,32 @@ local CONFIG = {
     --   2. Script  a filename appended to CONFIG.BaseUrl
     --   3. File    a local file in the executor's workspace folder
     -- Notes: first character is the marker  +  added   -  fixed   ~  changed
+    -- general purpose scripts, offered in the Utility tab. these are
+    -- other people's work, fetched straight from their URLs.
+    Tools = {
+        { Name = "Infinite Yield", By = "EdgeIY",
+          Desc = "Admin command bar",
+          Url = "https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source" },
+        { Name = "Dex Explorer++", By = "AZYsGithub",
+          Desc = "Browse and edit the game's instance tree",
+          Url = "https://github.com/AZYsGithub/DexPlusPlus/releases/latest/download/out.lua" },
+        { Name = "Cobalt", By = "upio",
+          Desc = "General purpose hub",
+          Url = "https://gitlab.com/upio/cobalt/-/releases/permalink/latest/downloads/Cobalt.luau" },
+    },
+
+    -- third party game scripts, offered when we have no build of our
+    -- own for the place you are in. PlaceId lets the hub match them
+    -- automatically; leave it 0 and it still shows in the list.
+    Public = {
+        { Name = "Bedwars", PlaceId = 0, By = "catvape",
+          Url = "https://api.catvape.dev/script?key=iqMLz5EBqfsCI7JDsAHzp6X9q2hEKyWB0QJsg3QjW7suzD38" },
+        { Name = "Blade Ball", PlaceId = 13772394625, By = "Snowy Hub",
+          Url = "https://rawscripts.net/raw/Blade-Ball-Snowy-Hub-Auto-Parry-Auto-Evade-Auto-Cast-More-245541" },
+        { Name = "Basketball Zero", PlaceId = 0, By = "Rice Hub",
+          Url = "https://rawscripts.net/raw/UPD-Basketball:-Zero-Rice-Hub-210988" },
+    },
+
     Library = {
         { Name = "Universal", PlaceId = 0, Url = "", Script = "universal.lua",
           File = { "privateclub_universal.lua", "universal.lua" },
@@ -1352,6 +1378,39 @@ local function fetchSource(entry)
     return nil
 end
 
+-- runs a plain url, used by the tools and public script lists
+local function runUrl(name, url, status)
+    if status then
+        status.Text = "Loading " .. name .. "\u{2026}"
+        status.TextColor3 = T.DIM
+    end
+    task.spawn(function()
+        local ok, err = pcall(function()
+            loadstring(game:HttpGet(url))()
+        end)
+        if status then
+            status.Text = ok and (name .. " loaded")
+                or ("Failed: " .. tostring(err):sub(1, 60))
+            status.TextColor3 = ok and T.OK or T.ERR
+        end
+    end)
+end
+
+-- is there a build of ours for the place we are in?
+local function ourEntryForThisGame()
+    for _, e in ipairs(CONFIG.Library) do
+        if e.PlaceId == game.PlaceId and e.PlaceId ~= 0 then return e end
+    end
+    return nil
+end
+
+local function publicForThisGame()
+    for _, e in ipairs(CONFIG.Public) do
+        if e.PlaceId == game.PlaceId and e.PlaceId ~= 0 then return e end
+    end
+    return nil
+end
+
 local function runScript(entry)
     if not entry then return end
 
@@ -1581,13 +1640,29 @@ local hopBtn      = rowBtn(pgUtility, 2, "Server hop")
 local rejoinBtn   = rowBtn(pgUtility, 3, "Rejoin server")
 local smallSrvBtn = rowBtn(pgUtility, 4, "Join smallest server")
 
+sectionLabel(pgUtility, 9, "Tools")
+for i, tool in ipairs(CONFIG.Tools) do
+    local b = rowBtn(pgUtility, 9 + i, tool.Name .. "   " .. tool.Desc)
+    b.MouseButton1Click:Connect(function()
+        runUrl(tool.Name, tool.Url, utilStatus)
+    end)
+end
+
+sectionLabel(pgUtility, 20, "Public scripts")
+for i, pub in ipairs(CONFIG.Public) do
+    local b = rowBtn(pgUtility, 20 + i, pub.Name .. "   by " .. pub.By)
+    b.MouseButton1Click:Connect(function()
+        runUrl(pub.Name, pub.Url, utilStatus)
+    end)
+end
+
 sectionLabel(pgUtility, 5, "Character")
 local respawnBtn = rowBtn(pgUtility, 6, "Respawn")
 local camBtn     = rowBtn(pgUtility, 7, "Reset camera")
 
 local utilStatus = micro({
     Parent = pgUtility,
-    LayoutOrder = 8,
+    LayoutOrder = 99,
     Size = UDim2.new(1, 0, 0, 16),
     TextSize = 11.5,
     TextColor3 = T.FAINT,
@@ -1664,6 +1739,10 @@ sectionLabel(pgSettings, 1, "Account")
 toggleRow(pgSettings, 2, "Save key on this device", "saveKey", true)
 local clearBtn = rowBtn(pgSettings, 3, "Sign out & clear saved key")
 
+sectionLabel(pgSettings, 7, "Automation")
+toggleRow(pgSettings, 8, "Auto load this game's script", "autoLoad", false)
+toggleRow(pgSettings, 9, "Offer public scripts when unsupported", "offerPublic", true)
+
 sectionLabel(pgSettings, 4, "Display")
 toggleRow(pgSettings, 5, "Background blur", "blur", true, function(on)
     if blur then tween(blur, 0.3, { Size = on and 14 or 0 }) end
@@ -1674,8 +1753,8 @@ toggleRow(pgSettings, 6, "Hide my name in the hub", "hideName", false, function(
     sideUser.Text    = on and "@hidden" or ("@" .. LP.Name)
 end)
 
-sectionLabel(pgSettings, 7, "About")
-local aboutPanel = panel({ Parent = pgSettings, LayoutOrder = 8, Size = UDim2.new(1, 0, 0, 76) })
+sectionLabel(pgSettings, 12, "About")
+local aboutPanel = panel({ Parent = pgSettings, LayoutOrder = 13, Size = UDim2.new(1, 0, 0, 76) })
 
 for i, pair in ipairs({
     { "HWID", hwid() },
@@ -1777,6 +1856,90 @@ local function goAdmin()
     sideTier.Text = "ROOT"
 end
 
+-- a small yes/no sheet over the hub
+local function confirm(title, body, yesText, onYes)
+    local shade = new("Frame", {
+        Parent = win,
+        Size = UDim2.fromScale(1, 1),
+        BackgroundColor3 = T.BG0,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 60,
+    })
+    tween(shade, 0.2, { BackgroundTransparency = 0.35 })
+
+    local card = new("Frame", {
+        Parent = shade,
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromOffset(380, 0),
+        BackgroundColor3 = T.BG1,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        ZIndex = 61,
+    }, { corner(RADIUS), accent(stroke(T.RED, 0.5), "Color") })
+
+    accent(new("Frame", {
+        Parent = card,
+        Size = UDim2.new(1, 0, 0, 2),
+        BackgroundColor3 = T.RED,
+        BorderSizePixel = 0,
+        ZIndex = 62,
+    }), "BackgroundColor3")
+
+    label({
+        Parent = card,
+        Position = UDim2.fromOffset(20, 18),
+        Size = UDim2.new(1, -40, 0, 20),
+        Font = Enum.Font.GothamBold,
+        TextSize = 15,
+        TextColor3 = T.TXT,
+        ZIndex = 62,
+        Text = title,
+    })
+
+    label({
+        Parent = card,
+        Position = UDim2.fromOffset(20, 44),
+        Size = UDim2.new(1, -40, 0, 54),
+        TextSize = 12.5,
+        TextColor3 = T.DIM,
+        TextWrapped = true,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        ZIndex = 62,
+        Text = body,
+    })
+
+    local function sheetBtn(x, w, text, primary, cb)
+        local b = new("TextButton", {
+            Parent = card,
+            Position = UDim2.fromOffset(x, 108),
+            Size = UDim2.fromOffset(w, 34),
+            BackgroundColor3 = primary and T.RED or T.BG2,
+            BorderSizePixel = 0,
+            AutoButtonColor = false,
+            Font = Enum.Font.GothamBold,
+            TextSize = 12.5,
+            TextColor3 = primary and T.BG0 or T.DIM,
+            Text = text,
+            ZIndex = 62,
+        }, { corner(RADIUS), stroke(T.LINE, primary and 1 or 0.3) })
+        if primary then accent(b, "BackgroundColor3") end
+        b.MouseButton1Click:Connect(function()
+            tween(shade, 0.18, { BackgroundTransparency = 1 })
+            tween(card, 0.18, { Size = UDim2.fromOffset(380, 0) })
+            task.delay(0.22, function() shade:Destroy() end)
+            if cb then cb() end
+        end)
+        return b
+    end
+
+    sheetBtn(20, 170, yesText, true, onYes)
+    sheetBtn(198, 162, "No thanks", false, nil)
+
+    tween(card, 0.28, { Size = UDim2.fromOffset(380, 162) }, Enum.EasingStyle.Quint)
+end
+
 local function openHub(key, rec)
     activeKey, activeRec = key, rec
     refreshHome()
@@ -1788,6 +1951,37 @@ local function openHub(key, rec)
     tween(win, 0.34, { Size = UDim2.fromOffset(W, H) }, Enum.EasingStyle.Quint)
     selectTab("Home")
     setBlur(true)
+
+    task.delay(0.6, function()
+        local mine = ourEntryForThisGame()
+
+        -- our own script for this place, launched without a second run
+        if mine and setting("autoLoad", false) then
+            selectTab("Scripts")
+            runScript(mine)
+            return
+        end
+
+        if mine then return end
+
+        -- nothing of ours fits this place
+        local pub = publicForThisGame()
+        if pub and setting("offerPublic", true) then
+            confirm("Unsupported game detected",
+                "There is no privateclub build for this place yet, but a public "
+                .. "script exists: " .. pub.Name .. " by " .. pub.By
+                .. ". It is someone else's code and we cannot vouch for it.",
+                "Load " .. pub.Name,
+                function() runUrl(pub.Name, pub.Url, scriptStatus) end)
+        elseif setting("offerPublic", true) then
+            confirm("Unsupported game detected",
+                "There is no privateclub build for this place yet. The Utility tab "
+                .. "has general purpose tools that work anywhere, and the Scripts "
+                .. "tab lists the public scripts we know about.",
+                "Show me",
+                function() selectTab("Utility") end)
+        end
+    end)
 end
 
 -- ---------- unlock ----------
