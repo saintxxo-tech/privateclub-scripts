@@ -65,7 +65,7 @@ local CONFIG = {
     Library = {
         { Name = "Universal", PlaceId = 0, Url = "", Script = "universal.lua",
           File = { "privateclub_universal.lua", "universal.lua" },
-          Authors = "privateclub",
+          Authors = "privateclub", Ready = true,
           Updated = "-", Notes = {
             "+ Movement: speed, jump, noclip, infinite jump, fly",
             "+ Player ESP: boxes, names, tracers, team check",
@@ -77,7 +77,7 @@ local CONFIG = {
         } },
         { Name = "Murder Mystery 2", PlaceId = 142823291, Url = "", Script = "mm2.lua",
           File = { "privateclub_mm2.lua", "mm2.lua" },
-          Authors = "privateclub",
+          Authors = "privateclub", Ready = true,
           Updated = "-", Notes = {
             "+ Five role model: murderer, police, hero, innocent, ghost",
             "+ Role ESP with chams, boxes, health bars, auras",
@@ -92,7 +92,7 @@ local CONFIG = {
         -- "you are in this game" dot start working.
         { Name = "Ghost Drivers", PlaceId = 0, Url = "", Script = "ghostdrivers.lua",
           File = { "privateclub_ghostdrivers.lua", "ghostdrivers.lua" },
-          Authors = "privateclub",
+          Authors = "privateclub", Ready = true,
           Updated = "-", Notes = {
             "+ Auto drive with waypoints and throttle hold",
             "+ Player ESP with speed, level, rank and cash",
@@ -101,6 +101,53 @@ local CONFIG = {
             "+ No traffic collision",
             "+ Session stats and Discord webhook reports",
             "~ Right Ctrl toggles the menu",
+        } },
+
+        -- planned. Ready stays false until the .lua is actually in
+        -- games/, so the hub never offers a Load that would 404.
+        -- PlaceIds here are unverified: correct any that are wrong and
+        -- the icon plus the in-this-game dot start working.
+        { Name = "Grow a Garden", PlaceId = 126884695634066,
+          Script = "growagarden.lua", Authors = "privateclub", Ready = false,
+          Updated = "-", Notes = {
+            "~ Planned: auto plant, harvest, seed buying and pet handling",
+        } },
+        { Name = "Steal a Brainrot", PlaceId = 109983668079237,
+          Script = "stealabrainrot.lua", Authors = "privateclub", Ready = false,
+          Updated = "-", Notes = {
+            "~ Planned: auto steal, base lock bypass and item ESP",
+        } },
+        { Name = "99 Nights in the Forest", PlaceId = 0,
+          Script = "99nights.lua", Authors = "privateclub", Ready = false,
+          Updated = "-", Notes = {
+            "~ Planned: auto gather, campfire keeper and mob ESP",
+            "- PlaceId still needed",
+        } },
+        { Name = "Blox Fruits", PlaceId = 2753915549,
+          Script = "bloxfruits.lua", Authors = "privateclub", Ready = false,
+          Updated = "-", Notes = {
+            "~ Planned: auto farm level, fruit sniper and raid helper",
+        } },
+        { Name = "Da Hood", PlaceId = 2788229376,
+          Script = "dahood.lua", Authors = "privateclub", Ready = false,
+          Updated = "-", Notes = {
+            "~ Planned: aim assist, silent aim and auto farm",
+        } },
+        { Name = "Fisch", PlaceId = 16732694052,
+          Script = "fisch.lua", Authors = "privateclub", Ready = false,
+          Updated = "-", Notes = {
+            "~ Planned: auto shake, reel, instant catch and auto sell",
+        } },
+        { Name = "Arsenal", PlaceId = 286090429,
+          Script = "arsenal.lua", Authors = "privateclub", Ready = false,
+          Updated = "-", Notes = {
+            "~ Planned: silent aim, player ESP and hitbox expander",
+        } },
+        { Name = "Rivals", PlaceId = 0,
+          Script = "rivals.lua", Authors = "privateclub", Ready = false,
+          Updated = "-", Notes = {
+            "~ Planned: aimbot, ESP and recoil control",
+            "- PlaceId still needed",
         } },
     },
 }
@@ -1356,6 +1403,8 @@ end
 
 -- an explicit Url wins, otherwise BaseUrl .. Script
 local function scriptUrl(entry)
+    -- a planned entry has no file behind it yet
+    if entry.Ready == false then return nil end
     if entry.Url and entry.Url ~= "" then return entry.Url end
     if CONFIG.BaseUrl ~= "" and entry.Script and entry.Script ~= "" then
         local url = CONFIG.BaseUrl .. entry.Script
@@ -1399,7 +1448,10 @@ end
 -- is there a build of ours for the place we are in?
 local function ourEntryForThisGame()
     for _, e in ipairs(CONFIG.Library) do
-        if e.PlaceId == game.PlaceId and e.PlaceId ~= 0 then return e end
+        if e.PlaceId == game.PlaceId and e.PlaceId ~= 0
+           and (e.Ready ~= false or localFile(e)) then
+            return e
+        end
     end
     return nil
 end
@@ -1415,6 +1467,11 @@ local function runScript(entry)
     if not entry then return end
 
     local hasSource = (scriptUrl(entry) ~= nil) or (localFile(entry) ~= nil)
+    if entry.Ready == false and not localFile(entry) then
+        scriptStatus.Text = entry.Name .. " is not built yet"
+        scriptStatus.TextColor3 = T.GOLD
+        return
+    end
 
     if not hasSource then
         scriptStatus.Text = "No script linked for " .. entry.Name .. " yet"
@@ -1460,6 +1517,7 @@ local function selectGame(idx)
     dAuthors.Text = entry.Authors and ("by " .. entry.Authors) or ""
     dUpdated.Text = "Last updated: " .. (entry.Updated or "\u{2014}")
     scriptStatus.Text = ""
+    loadBtn.Text = (entry.Ready == false) and "Coming soon" or "Load"
 
     for _, child in ipairs(notes:GetChildren()) do
         if child:IsA("GuiObject") then child:Destroy() end
@@ -1645,14 +1703,6 @@ for i, tool in ipairs(CONFIG.Tools) do
     local b = rowBtn(pgUtility, 9 + i, tool.Name .. "   " .. tool.Desc)
     b.MouseButton1Click:Connect(function()
         runUrl(tool.Name, tool.Url, utilStatus)
-    end)
-end
-
-sectionLabel(pgUtility, 20, "Public scripts")
-for i, pub in ipairs(CONFIG.Public) do
-    local b = rowBtn(pgUtility, 20 + i, pub.Name .. "   by " .. pub.By)
-    b.MouseButton1Click:Connect(function()
-        runUrl(pub.Name, pub.Url, utilStatus)
     end)
 end
 
@@ -1940,6 +1990,158 @@ local function confirm(title, body, yesText, onYes)
     tween(card, 0.28, { Size = UDim2.fromOffset(380, 162) }, Enum.EasingStyle.Quint)
 end
 
+-- a sheet with a list to choose from
+local function chooser(title, body, items, onPick)
+    local shade = new("Frame", {
+        Parent = win,
+        Size = UDim2.fromScale(1, 1),
+        BackgroundColor3 = T.BG0,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 60,
+    })
+    tween(shade, 0.2, { BackgroundTransparency = 0.35 })
+
+    local rows = math.min(#items, 5)
+    local height = 132 + rows * 40
+
+    local card = new("Frame", {
+        Parent = shade,
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromOffset(420, 0),
+        BackgroundColor3 = T.BG1,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        ZIndex = 61,
+    }, { corner(RADIUS), accent(stroke(T.RED, 0.5), "Color") })
+
+    accent(new("Frame", {
+        Parent = card,
+        Size = UDim2.new(1, 0, 0, 2),
+        BackgroundColor3 = T.RED,
+        BorderSizePixel = 0,
+        ZIndex = 62,
+    }), "BackgroundColor3")
+
+    label({
+        Parent = card,
+        Position = UDim2.fromOffset(20, 16),
+        Size = UDim2.new(1, -40, 0, 20),
+        Font = Enum.Font.GothamBold,
+        TextSize = 15,
+        TextColor3 = T.TXT,
+        ZIndex = 62,
+        Text = title,
+    })
+
+    label({
+        Parent = card,
+        Position = UDim2.fromOffset(20, 40),
+        Size = UDim2.new(1, -40, 0, 34),
+        TextSize = 12,
+        TextColor3 = T.DIM,
+        TextWrapped = true,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        ZIndex = 62,
+        Text = body,
+    })
+
+    local function close()
+        tween(shade, 0.18, { BackgroundTransparency = 1 })
+        tween(card, 0.18, { Size = UDim2.fromOffset(420, 0) })
+        task.delay(0.22, function() shade:Destroy() end)
+    end
+
+    local listF = new("ScrollingFrame", {
+        Parent = card,
+        Position = UDim2.fromOffset(20, 80),
+        Size = UDim2.new(1, -40, 0, rows * 40),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 2,
+        ScrollBarImageColor3 = T.LINE,
+        CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        ZIndex = 62,
+    }, { new("UIListLayout", { Padding = UDim.new(0, 6) }) })
+
+    for i, item in ipairs(items) do
+        local b = new("TextButton", {
+            Parent = listF,
+            LayoutOrder = i,
+            Size = UDim2.new(1, 0, 0, 34),
+            BackgroundColor3 = T.BG2,
+            BorderSizePixel = 0,
+            AutoButtonColor = false,
+            Text = "",
+            ZIndex = 62,
+        }, { corner(RADIUS), stroke(T.LINE, 0.3) })
+
+        label({
+            Parent = b,
+            Position = UDim2.fromOffset(12, 0),
+            Size = UDim2.new(1, -20, 1, 0),
+            Font = Enum.Font.GothamMedium,
+            TextSize = 12.5,
+            TextColor3 = T.TXT,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            ZIndex = 63,
+            Text = item.name,
+        })
+
+        label({
+            Parent = b,
+            AnchorPoint = Vector2.new(1, 0.5),
+            Position = UDim2.new(1, -12, 0.5, 0),
+            Size = UDim2.fromOffset(170, 16),
+            TextSize = 11,
+            TextColor3 = T.FAINT,
+            TextXAlignment = Enum.TextXAlignment.Right,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            ZIndex = 63,
+            Text = item.sub or "",
+        })
+
+        b.MouseEnter:Connect(function() tween(b, 0.12, { BackgroundColor3 = T.BG1 }) end)
+        b.MouseLeave:Connect(function() tween(b, 0.12, { BackgroundColor3 = T.BG2 }) end)
+        b.MouseButton1Click:Connect(function()
+            close()
+            if onPick then onPick(item) end
+        end)
+    end
+
+    local cancel = new("TextButton", {
+        Parent = card,
+        AnchorPoint = Vector2.new(0.5, 1),
+        Position = UDim2.new(0.5, 0, 1, -16),
+        Size = UDim2.fromOffset(160, 32),
+        BackgroundColor3 = T.BG2,
+        BorderSizePixel = 0,
+        AutoButtonColor = false,
+        Font = Enum.Font.GothamMedium,
+        TextSize = 12.5,
+        TextColor3 = T.DIM,
+        Text = "No thanks",
+        ZIndex = 62,
+    }, { corner(RADIUS), stroke(T.LINE, 0.3) })
+    cancel.MouseButton1Click:Connect(close)
+
+    tween(card, 0.3, { Size = UDim2.fromOffset(420, height) }, Enum.EasingStyle.Quint)
+end
+
+-- everything we can offer on a game we do not build for
+local function publicChoices()
+    local items = {}
+    for _, p in ipairs(CONFIG.Public) do
+        table.insert(items, { name = p.Name, sub = "by " .. p.By, url = p.Url })
+    end
+    for _, t in ipairs(CONFIG.Tools) do
+        table.insert(items, { name = t.Name, sub = t.Desc, url = t.Url })
+    end
+    return items
+end
+
 local function openHub(key, rec)
     activeKey, activeRec = key, rec
     refreshHome()
@@ -1974,12 +2176,12 @@ local function openHub(key, rec)
                 "Load " .. pub.Name,
                 function() runUrl(pub.Name, pub.Url, scriptStatus) end)
         elseif setting("offerPublic", true) then
-            confirm("Unsupported game detected",
-                "There is no privateclub build for this place yet. The Utility tab "
-                .. "has general purpose tools that work anywhere, and the Scripts "
-                .. "tab lists the public scripts we know about.",
-                "Show me",
-                function() selectTab("Utility") end)
+            chooser("Unsupported game detected",
+                "No privateclub build fits this place yet. These are free public "
+                .. "scripts and general tools by other people, loaded straight "
+                .. "from their own links.",
+                publicChoices(),
+                function(item) runUrl(item.name, item.url, scriptStatus) end)
         end
     end)
 end
