@@ -139,9 +139,13 @@ local CONFIG = {
             "~ Planned: auto shake, reel, instant catch and auto sell",
         } },
         { Name = "Arsenal", PlaceId = 286090429,
-          Script = "arsenal.lua", Authors = "privateclub", Ready = false,
-          Updated = "-", Notes = {
-            "~ Planned: silent aim, player ESP and hitbox expander",
+          Script = "arsenal.lua", Authors = "privateclub", Ready = true,
+          Updated = "v1.0", Notes = {
+            "+ Smoothed aimbot with FOV ring, wall and team checks",
+            "+ Silent aim with a remote logger and name filter",
+            "+ Triggerbot, hitbox expander and weapon value mods",
+            "+ Box, name, health, tracer, cham and glow ESP",
+            "+ Movement, players list and the shared visuals engine",
         } },
         { Name = "Rivals", PlaceId = 0,
           Script = "rivals.lua", Authors = "privateclub", Ready = false,
@@ -1456,9 +1460,35 @@ local function ourEntryForThisGame()
     return nil
 end
 
+local placeName
+
+task.spawn(function()
+    local ok, info = pcall(function()
+        return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+    end)
+    if ok and info and info.Name then placeName = info.Name end
+end)
+
+local function normalise(text)
+    return (tostring(text):lower():gsub("[^%a%d]", ""))
+end
+
 local function publicForThisGame()
     for _, e in ipairs(CONFIG.Public) do
         if e.PlaceId == game.PlaceId and e.PlaceId ~= 0 then return e end
+    end
+
+    -- names are the fallback, since half of these have no id yet.
+    -- "Basketball Zero" matches "[UPD] Basketball: Zero" once both
+    -- sides are stripped down to letters and digits.
+    if placeName then
+        local here = normalise(placeName)
+        for _, e in ipairs(CONFIG.Public) do
+            local want = normalise(e.Name)
+            if want ~= "" and (here:find(want, 1, true) or want:find(here, 1, true)) then
+                return e
+            end
+        end
     end
     return nil
 end
@@ -1990,158 +2020,6 @@ local function confirm(title, body, yesText, onYes)
     tween(card, 0.28, { Size = UDim2.fromOffset(380, 162) }, Enum.EasingStyle.Quint)
 end
 
--- a sheet with a list to choose from
-local function chooser(title, body, items, onPick)
-    local shade = new("Frame", {
-        Parent = win,
-        Size = UDim2.fromScale(1, 1),
-        BackgroundColor3 = T.BG0,
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        ZIndex = 60,
-    })
-    tween(shade, 0.2, { BackgroundTransparency = 0.35 })
-
-    local rows = math.min(#items, 5)
-    local height = 132 + rows * 40
-
-    local card = new("Frame", {
-        Parent = shade,
-        AnchorPoint = Vector2.new(0.5, 0.5),
-        Position = UDim2.fromScale(0.5, 0.5),
-        Size = UDim2.fromOffset(420, 0),
-        BackgroundColor3 = T.BG1,
-        BorderSizePixel = 0,
-        ClipsDescendants = true,
-        ZIndex = 61,
-    }, { corner(RADIUS), accent(stroke(T.RED, 0.5), "Color") })
-
-    accent(new("Frame", {
-        Parent = card,
-        Size = UDim2.new(1, 0, 0, 2),
-        BackgroundColor3 = T.RED,
-        BorderSizePixel = 0,
-        ZIndex = 62,
-    }), "BackgroundColor3")
-
-    label({
-        Parent = card,
-        Position = UDim2.fromOffset(20, 16),
-        Size = UDim2.new(1, -40, 0, 20),
-        Font = Enum.Font.GothamBold,
-        TextSize = 15,
-        TextColor3 = T.TXT,
-        ZIndex = 62,
-        Text = title,
-    })
-
-    label({
-        Parent = card,
-        Position = UDim2.fromOffset(20, 40),
-        Size = UDim2.new(1, -40, 0, 34),
-        TextSize = 12,
-        TextColor3 = T.DIM,
-        TextWrapped = true,
-        TextYAlignment = Enum.TextYAlignment.Top,
-        ZIndex = 62,
-        Text = body,
-    })
-
-    local function close()
-        tween(shade, 0.18, { BackgroundTransparency = 1 })
-        tween(card, 0.18, { Size = UDim2.fromOffset(420, 0) })
-        task.delay(0.22, function() shade:Destroy() end)
-    end
-
-    local listF = new("ScrollingFrame", {
-        Parent = card,
-        Position = UDim2.fromOffset(20, 80),
-        Size = UDim2.new(1, -40, 0, rows * 40),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        ScrollBarThickness = 2,
-        ScrollBarImageColor3 = T.LINE,
-        CanvasSize = UDim2.new(),
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        ZIndex = 62,
-    }, { new("UIListLayout", { Padding = UDim.new(0, 6) }) })
-
-    for i, item in ipairs(items) do
-        local b = new("TextButton", {
-            Parent = listF,
-            LayoutOrder = i,
-            Size = UDim2.new(1, 0, 0, 34),
-            BackgroundColor3 = T.BG2,
-            BorderSizePixel = 0,
-            AutoButtonColor = false,
-            Text = "",
-            ZIndex = 62,
-        }, { corner(RADIUS), stroke(T.LINE, 0.3) })
-
-        label({
-            Parent = b,
-            Position = UDim2.fromOffset(12, 0),
-            Size = UDim2.new(1, -20, 1, 0),
-            Font = Enum.Font.GothamMedium,
-            TextSize = 12.5,
-            TextColor3 = T.TXT,
-            TextTruncate = Enum.TextTruncate.AtEnd,
-            ZIndex = 63,
-            Text = item.name,
-        })
-
-        label({
-            Parent = b,
-            AnchorPoint = Vector2.new(1, 0.5),
-            Position = UDim2.new(1, -12, 0.5, 0),
-            Size = UDim2.fromOffset(170, 16),
-            TextSize = 11,
-            TextColor3 = T.FAINT,
-            TextXAlignment = Enum.TextXAlignment.Right,
-            TextTruncate = Enum.TextTruncate.AtEnd,
-            ZIndex = 63,
-            Text = item.sub or "",
-        })
-
-        b.MouseEnter:Connect(function() tween(b, 0.12, { BackgroundColor3 = T.BG1 }) end)
-        b.MouseLeave:Connect(function() tween(b, 0.12, { BackgroundColor3 = T.BG2 }) end)
-        b.MouseButton1Click:Connect(function()
-            close()
-            if onPick then onPick(item) end
-        end)
-    end
-
-    local cancel = new("TextButton", {
-        Parent = card,
-        AnchorPoint = Vector2.new(0.5, 1),
-        Position = UDim2.new(0.5, 0, 1, -16),
-        Size = UDim2.fromOffset(160, 32),
-        BackgroundColor3 = T.BG2,
-        BorderSizePixel = 0,
-        AutoButtonColor = false,
-        Font = Enum.Font.GothamMedium,
-        TextSize = 12.5,
-        TextColor3 = T.DIM,
-        Text = "No thanks",
-        ZIndex = 62,
-    }, { corner(RADIUS), stroke(T.LINE, 0.3) })
-    cancel.MouseButton1Click:Connect(close)
-
-    tween(card, 0.3, { Size = UDim2.fromOffset(420, height) }, Enum.EasingStyle.Quint)
-end
-
--- everything we can offer on a game we do not build for
-local function publicChoices()
-    local items = {}
-    for _, p in ipairs(CONFIG.Public) do
-        table.insert(items, { name = p.Name, sub = "by " .. p.By, url = p.Url })
-    end
-    for _, t in ipairs(CONFIG.Tools) do
-        table.insert(items, { name = t.Name, sub = t.Desc, url = t.Url })
-    end
-    return items
-end
-
 local function openHub(key, rec)
     activeKey, activeRec = key, rec
     refreshHome()
@@ -2154,7 +2032,9 @@ local function openHub(key, rec)
     selectTab("Home")
     setBlur(true)
 
-    task.delay(0.6, function()
+    task.spawn(function()
+        task.wait(0.6)
+
         local mine = ourEntryForThisGame()
 
         -- our own script for this place, launched without a second run
@@ -2163,26 +2043,27 @@ local function openHub(key, rec)
             runScript(mine)
             return
         end
-
         if mine then return end
+        if not setting("offerPublic", true) then return end
 
-        -- nothing of ours fits this place
-        local pub = publicForThisGame()
-        if pub and setting("offerPublic", true) then
-            confirm("Unsupported game detected",
-                "There is no privateclub build for this place yet, but a public "
-                .. "script exists: " .. pub.Name .. " by " .. pub.By
-                .. ". It is someone else's code and we cannot vouch for it.",
-                "Load " .. pub.Name,
-                function() runUrl(pub.Name, pub.Url, scriptStatus) end)
-        elseif setting("offerPublic", true) then
-            chooser("Unsupported game detected",
-                "No privateclub build fits this place yet. These are free public "
-                .. "scripts and general tools by other people, loaded straight "
-                .. "from their own links.",
-                publicChoices(),
-                function(item) runUrl(item.name, item.url, scriptStatus) end)
+        -- give the place name a moment to arrive before matching on it
+        for _ = 1, 20 do
+            if placeName then break end
+            task.wait(0.15)
         end
+
+        local pub = publicForThisGame()
+        if not pub then
+            say(scriptStatus, "No script for this game yet", T.GOLD)
+            return
+        end
+
+        confirm("Unsupported game detected",
+            (placeName or "This place") .. " has no privateclub build yet, but a "
+            .. "public script exists: " .. pub.Name .. " by " .. pub.By
+            .. ". It is someone else's code and we cannot vouch for it.",
+            "Load " .. pub.Name,
+            function() runUrl(pub.Name, pub.Url, scriptStatus) end)
     end)
 end
 

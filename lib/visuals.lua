@@ -69,28 +69,65 @@ function V.restoreSky()
     if originalSky and not originalSky.Parent then originalSky.Parent = Lighting end
 end
 
--- builds a Sky for an asset id, whichever shape the asset happens to be
-function V.skyFromAsset(id)
-    local sky
+local function skyHasFaces(sky)
+    if not sky then return false end
+    for _, face in ipairs({ "SkyboxBk", "SkyboxDn", "SkyboxFt",
+                            "SkyboxLf", "SkyboxRt", "SkyboxUp" }) do
+        local v = sky[face]
+        if type(v) == "string" and v ~= "" and v ~= "rbxassetid://0" then
+            return true
+        end
+    end
+    return false
+end
 
-    local ok, model = pcall(function()
+local function findSkyIn(objs)
+    for _, inst in ipairs(objs or {}) do
+        if inst:IsA("Sky") then return inst end
+        local found = inst:FindFirstChildWhichIsA("Sky", true)
+        if found then return found end
+    end
+    return nil
+end
+
+-- returns sky, howItLoaded
+function V.skyFromAsset(id)
+    local asset = "rbxassetid://" .. tostring(id)
+
+    -- 1. the one executors actually allow from the client
+    local ok, objs = pcall(function() return game:GetObjects(asset) end)
+    if ok and type(objs) == "table" then
+        local found = findSkyIn(objs)
+        if found then
+            local sky = found:Clone()
+            for _, inst in ipairs(objs) do pcall(function() inst:Destroy() end) end
+            sky.Name = "pc_sky"
+            return sky, "GetObjects"
+        end
+        for _, inst in ipairs(objs) do pcall(function() inst:Destroy() end) end
+    end
+
+    -- 2. server / studio path, harmless to attempt
+    local ok2, model = pcall(function()
         return game:GetService("InsertService"):LoadAsset(id)
     end)
-    if ok and model then
+    if ok2 and model then
         local found = model:FindFirstChildWhichIsA("Sky", true)
-        if found then sky = found:Clone() end
+        if found then
+            local sky = found:Clone()
+            pcall(function() model:Destroy() end)
+            sky.Name = "pc_sky"
+            return sky, "InsertService"
+        end
         pcall(function() model:Destroy() end)
     end
 
-    if not sky then
-        local tex = "rbxassetid://" .. tostring(id)
-        sky = Instance.new("Sky")
-        sky.SkyboxBk, sky.SkyboxDn, sky.SkyboxFt = tex, tex, tex
-        sky.SkyboxLf, sky.SkyboxRt, sky.SkyboxUp = tex, tex, tex
-    end
-
+    -- 3. the id might genuinely be an image, so use it on all six faces
+    local sky = Instance.new("Sky")
+    sky.SkyboxBk, sky.SkyboxDn, sky.SkyboxFt = asset, asset, asset
+    sky.SkyboxLf, sky.SkyboxRt, sky.SkyboxUp = asset, asset, asset
     sky.Name = "pc_sky"
-    return sky
+    return sky, "texture"
 end
 
 -- accepts an entry from V.Skyboxes, a name, or a raw id
@@ -105,12 +142,18 @@ function V.setSkybox(which)
         return true, "default sky restored"
     end
 
+    local sky, how = V.skyFromAsset(entry.id)
+    if not skyHasFaces(sky) then
+        pcall(function() sky:Destroy() end)
+        return false, entry.name .. " has no usable faces"
+    end
+
+    -- only now is it safe to take the game's sky away
     clearOurSky()
     if originalSky then originalSky.Parent = nil end
-
-    local sky = V.skyFromAsset(entry.id)
     sky.Parent = Lighting
-    return true, entry.name
+
+    return true, entry.name .. " (" .. how .. ")"
 end
 
 function V.customSkybox(id)
