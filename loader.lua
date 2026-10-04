@@ -103,6 +103,17 @@ local CONFIG = {
             "~ Right Ctrl toggles the menu",
         } },
 
+        { Name = "Bridge Duels", PlaceId = 0,
+          Script = "bridgeduels.lua", Authors = "privateclub", Ready = true,
+          Updated = "v1.0", Notes = {
+            "+ Auto bridge, tower and scaffold off a captured packet",
+            "+ Aimbot with separate yaw and pitch smoothing",
+            "+ Sword reach, autoclicker and hitbox expander",
+            "+ Auto gold apple below a health threshold",
+            "+ Full player ESP, shaders and skyboxes",
+            "~ Capture one manual block placement before bridging",
+        } },
+
         -- planned. Ready stays false until the .lua is actually in
         -- games/, so the hub never offers a Load that would 404.
         -- PlaceIds here are unverified: correct any that are wrong and
